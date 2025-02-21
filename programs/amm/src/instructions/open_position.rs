@@ -7,7 +7,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program;
 use anchor_lang::system_program::{transfer, Transfer};
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::metadata::Metadata;
+use anchor_spl::metadata::{self, Metadata};
 use anchor_spl::token::{Mint, Token, TokenAccount};
 use anchor_spl::token_2022::spl_token_2022::extension::{
     BaseStateWithExtensions, StateWithExtensions,
@@ -18,7 +18,8 @@ use anchor_spl::token_2022::{
     spl_token_2022::{self, instruction::AuthorityType},
 };
 use anchor_spl::token_interface;
-use mpl_token_metadata::{instruction::create_metadata_accounts_v3, state::Creator};
+use mpl_token_metadata::types::Creator;
+use mpl_token_metadata::types::DataV2;
 use std::cell::RefMut;
 #[cfg(feature = "enable-log")]
 use std::convert::identity;
@@ -835,41 +836,37 @@ fn initialize_metadata_account<'info>(
     uri: String,
     signers_seeds: &[&[&[u8]]],
 ) -> Result<()> {
-    let create_metadata_ix = create_metadata_accounts_v3(
-        metadata_program.key(),
-        metadata_account.key(),
-        position_nft_mint.key(),
-        authority.key(),
-        payer.key(),
-        authority.key(),
-        name,
-        symbol,
-        uri,
-        Some(vec![Creator {
-            address: authority.key(),
-            verified: true,
-            share: 100,
-        }]),
-        0,
-        true,
+    metadata::create_metadata_accounts_v3(
+        CpiContext::new_with_signer(
+            metadata_program.to_account_info(),
+            metadata::CreateMetadataAccountsV3 {
+                metadata: metadata_account.to_account_info(),
+                mint: position_nft_mint.to_account_info(),
+                mint_authority: authority.to_account_info(),
+                payer: payer.to_account_info(),
+                update_authority: authority.to_account_info(),
+                system_program: system_program.to_account_info(),
+                rent: rent.to_account_info(),
+            },
+            signers_seeds,
+        ),
+        DataV2 {
+            name,
+            symbol,
+            uri,
+            seller_fee_basis_points: 0,
+            creators: Some(vec![Creator {
+                address: authority.key(),
+                verified: true,
+                share: 100,
+            }]),
+            collection: None,
+            uses: None,
+        },
         false,
+        true,
         None,
-        None,
-        None,
-    );
-    solana_program::program::invoke_signed(
-        &create_metadata_ix,
-        &[
-            metadata_account.to_account_info(),
-            position_nft_mint.to_account_info(),
-            payer.to_account_info(),
-            authority.to_account_info(),
-            system_program.to_account_info(),
-            rent.to_account_info(),
-        ],
-        signers_seeds,
     )?;
-
     Ok(())
 }
 
@@ -895,7 +892,7 @@ pub fn initialize_token_metadata_extension<'info>(
     let mint_state_unpacked =
         StateWithExtensions::<spl_token_2022::state::Mint>::unpack(&mint_data)?;
     let new_account_len = mint_state_unpacked
-        .try_get_new_account_len::<spl_token_metadata_interface::state::TokenMetadata>(&metadata)?;
+        .try_get_new_account_len_for_variable_len_extension::<spl_token_metadata_interface::state::TokenMetadata>(&metadata)?;
     let new_rent_exempt_lamports = Rent::get()?.minimum_balance(new_account_len);
     let additional_lamports = new_rent_exempt_lamports.saturating_sub(position_nft_mint.lamports());
     // CPI call will borrow the account data
